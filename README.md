@@ -1,3 +1,7 @@
+# Project state
+This project will be completely rewritten.
+In the current version, not all packages are downloaded.
+
 # GoDownloadPackages
 Download packages for Ubuntu, include all packages dependents (also take dependents for dependents pack etc). And you get all the packages you need to install.
 No "sudo" required.
