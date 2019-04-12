@@ -8,4 +8,6 @@ The program generate threads for cyclically and recursively creates a dependency
 No "sudo" required.
 
 Example: 
-./dl-deb -t code
+./dl-deb -pc gnome-icon-theme (prints all packages) 
+./dl-deb -pc gnome-icon-theme -dl yes (next to the binary creates a folder "./packs/" and downloads packages there) 
+./dl-deb -pc gnome-icon-theme -dl yes -fl /somePath/ (downloads packages there) 
