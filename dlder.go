@@ -3,11 +3,17 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
+
+//TODO: error chan
 
 type mapWithSync struct { //TODO: try sync.Map https://habr.com/ru/post/338718/
 	lx  sync.Mutex
@@ -17,7 +23,9 @@ type mapWithSync struct { //TODO: try sync.Map https://habr.com/ru/post/338718/
 
 func main() {
 	start := time.Now()
-	tp := flag.String("t", "", "Package to download with all requered packs")
+	tp := flag.String("pc", "", "Package to download with all requered packs")
+	dl := flag.String("dl", "n", "Dowload all packs, or just show. May be `y` or `n`")
+	destFolder := flag.String("fl", "./packs/", "Package to download with all requered packs")
 	flag.Parse()
 
 	// pathToDl := "/home/thevan/goDev/go-dl-debs/paks"
@@ -27,7 +35,8 @@ func main() {
 	auxiliaryMapPointer.mp[*tp] = struct{}{} // insert target package to auxiliary map
 
 	wg := new(sync.WaitGroup)
-
+	gotSomeErr := make(chan struct{})
+	fmt.Println("Start looking 4")
 	for {
 		if len(auxiliaryMapPointer.mp) != 0 { // LOCK??
 
@@ -39,7 +48,7 @@ func main() {
 				resultDebMapPoiner.mp[newTargetPack] = struct{}{}
 				resultDebMapPoiner.lx.Unlock()
 				wg.Add(1)
-				go lpd(newTargetPack, resultDebMapPoiner, auxiliaryMapPointer, wg) //go
+				go lpd(newTargetPack, resultDebMapPoiner, auxiliaryMapPointer, wg)
 			}
 		} else {
 			wg.Wait()
@@ -49,30 +58,35 @@ func main() {
 		}
 	}
 
-	fmt.Println(len(resultDebMapPoiner.mp))
+	if *dl == "y" {
+		folderName := *destFolder
+		os.Mkdir(folderName, 0700)
+		ex, _ := os.Executable()
+		exPath := filepath.Dir(ex)
+		packagesFullPath := exPath + "/" + folderName
+		err := os.Chdir(packagesFullPath) // go to new folder
+		if err != nil {
+			log.Fatal("Cant enter directory: ", packagesFullPath) //FIXME: to err chan
+		}
 
-	// for k := range resultDebMapPoiner.mp {
-	// 	fmt.Println(k) //download)
-	// }
+		wg3 := new(sync.WaitGroup)
+		for p := range resultDebMapPoiner.mp {
+			wg3.Add(1)
+			go downloadPack(p, wg3) // go
+		}
+		wg3.Wait()
 
-	// folderName := "packages_for_" + pack //make new folder end move to it
-	// os.Mkdir(folderName, 0700)
-	// ex, _ := os.Executable()
-	// exPath := filepath.Dir(ex)
-	// packagesFullPath := exPath + "/" + folderName
-	// err := os.Chdir(packagesFullPath)
+	}
 
-	// if err != nil {
-	// 	log.Fatal("Cant enter directory: ", packagesFullPath)
-	// }
+	fmt.Printf("End, total number of packages: %v\n", len(resultDebMapPoiner.mp))
+	select {
+	case <-gotSomeErr:
+		fmt.Println("have some problems")
+		// range
+	}
 
-	// for keyPack := range packagesMap { // download all packages
-	// 	andso, _ := exec.Command("apt", "download", keyPack).Output()
-	// 	fmt.Println(string(andso))
-	// }
 	fmt.Println(time.Since(start))
-	//1m8.379200351s
-	//13.683422504s
+
 }
 
 func removePacksFromAuxiliaryMap(mainMap, secondMap *mapWithSync) {
@@ -103,10 +117,9 @@ func chooseNewPack(secondMap *mapWithSync) string {
 
 func lpd(packName string, mainMap, secondMap *mapWithSync, wg *sync.WaitGroup) {
 	wg2 := new(sync.WaitGroup)
-
 	ou, err := exec.Command("apt-cache", "depends", packName).Output()
 	if err != nil {
-		panic(err) // TODO: don't panic? Retry?
+		panic(err) //FIXME: to err chan
 	}
 	resArrStr := strings.Split(string(ou), "\n")
 
@@ -116,7 +129,7 @@ func lpd(packName string, mainMap, secondMap *mapWithSync, wg *sync.WaitGroup) {
 			p := strF[len(strF)-1]
 			if strings.Contains(p, "<") && len(resArrStr) > 1 {
 				wg2.Add(1)
-				go takeSeveralPacks(resArrStr, i, secondMap, wg2)
+				takeSeveralPacks(resArrStr, i, secondMap, wg2) //go
 			} else {
 				secondMap.lx.Lock()
 				secondMap.mp[p] = struct{}{}
@@ -142,4 +155,27 @@ func takeSeveralPacks(resArrStr []string, i int, secondMap *mapWithSync, wg2 *sy
 	}
 	wg2.Done()
 	return
+}
+
+func downloadPack(p string, wg3 *sync.WaitGroup) {
+	var exCode int
+	cmd := exec.Command("apt", "download", p)
+
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("Can't execute apt download %v, got error: %v", p, err) //FIXME: to err chan
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				exCode = status.ExitStatus()
+			}
+		}
+	}
+
+	if exCode != 0 {
+		fmt.Printf("Can't download package %v", p) //FIXME: to err chan
+	}
+
+	wg3.Done()
 }
