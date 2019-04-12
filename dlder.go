@@ -24,7 +24,7 @@ type mapWithSync struct { //TODO: try sync.Map https://habr.com/ru/post/338718/
 func main() {
 	start := time.Now()
 	tp := flag.String("pc", "", "Package to download with all requered packs")
-	dl := flag.String("dl", "n", "Dowload all packs, or just show. May be `y` or `n`")
+	dl := flag.String("dl", "no", "Dowload all packs, or just show. May be `y` or `n`")
 	destFolder := flag.String("fl", "./packs/", "Package to download with all requered packs")
 	flag.Parse()
 
@@ -35,7 +35,7 @@ func main() {
 	auxiliaryMapPointer.mp[*tp] = struct{}{} // insert target package to auxiliary map
 
 	wg := new(sync.WaitGroup)
-	gotSomeErr := make(chan struct{})
+	// gotSomeErr := make(chan struct{})
 	fmt.Println("Start looking 4")
 	for {
 		if len(auxiliaryMapPointer.mp) != 0 { // LOCK??
@@ -58,9 +58,9 @@ func main() {
 		}
 	}
 
-	if *dl == "y" {
+	if *dl == "yes" {
 		folderName := *destFolder
-		os.Mkdir(folderName, 0700)
+		os.Mkdir(folderName, 0700) // FIXME: check folder exist. also will be broken when full path to folder dosen't exist too
 		ex, _ := os.Executable()
 		exPath := filepath.Dir(ex)
 		packagesFullPath := exPath + "/" + folderName
@@ -76,14 +76,18 @@ func main() {
 		}
 		wg3.Wait()
 
+	} else {
+		for p := range resultDebMapPoiner.mp {
+			fmt.Println(p)
+		}
 	}
 
 	fmt.Printf("End, total number of packages: %v\n", len(resultDebMapPoiner.mp))
-	select {
-	case <-gotSomeErr:
-		fmt.Println("have some problems")
-		// range
-	}
+	// select {
+	// case <-gotSomeErr:
+	// 	fmt.Println("have some problems")
+	// 	// range
+	// }
 
 	fmt.Println(time.Since(start))
 
