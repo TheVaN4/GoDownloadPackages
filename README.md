@@ -1,13 +1,11 @@
 # Project state
-This project will be completely rewritten.
-In the current version, not all packages are downloaded.
+The project is in the process of writing.
+Development is conducted for learning and fun ;-)
 
 # GoDownloadPackages
-Download packages for Ubuntu, include all packages dependents (also take dependents for dependents pack etc). And you get all the packages you need to install.
+Uploading packages to ubuntu using the utility apt.
+The program generate threads for cyclically and recursively creates a dependency map for all packages that may be required for installation. Dependencies of dependencies of dependencies... Blah blah)
 No "sudo" required.
 
 Example: 
-
-./dlder htop
-
-It will be create folder "packages_for_htop" near running progamm and download all .deb packages there.
+./dl-deb -t code
