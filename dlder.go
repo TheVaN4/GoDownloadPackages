@@ -1,104 +1,145 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"log"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
-type MainMap struct {
-	sync.Mutex
-	M map[string]uint
+type mapWithSync struct { //TODO: try sync.Map https://habr.com/ru/post/338718/
+	lx  sync.Mutex
+	rlx sync.RWMutex // read mutex
+	mp  map[string]struct{}
 }
 
 func main() {
-	var i uint
-	args := os.Args[:]
-	if len(args) > 2 {
-		log.Fatal("You must write package name, not just run programm!")
-	}
-	pack := args[1]
-	packagesMap := &MainMap{M: make(map[string]uint)}
+	start := time.Now()
+	tp := flag.String("t", "", "Package to download with all requered packs")
+	flag.Parse()
 
-	Put(pack, i, packagesMap) // put "main" package
+	// pathToDl := "/home/thevan/goDev/go-dl-debs/paks"
+
+	resultDebMapPoiner := &mapWithSync{mp: make(map[string]struct{})}
+	auxiliaryMapPointer := &mapWithSync{mp: make(map[string]struct{})}
+	auxiliaryMapPointer.mp[*tp] = struct{}{} // insert target package to auxiliary map
+
+	wg := new(sync.WaitGroup)
+
+	for {
+		if len(auxiliaryMapPointer.mp) != 0 { // LOCK??
+
+			removePacksFromAuxiliaryMap(resultDebMapPoiner, auxiliaryMapPointer)
+			newTargetPack := chooseNewPack(auxiliaryMapPointer)
+
+			if newTargetPack != "" {
+				resultDebMapPoiner.lx.Lock()
+				resultDebMapPoiner.mp[newTargetPack] = struct{}{}
+				resultDebMapPoiner.lx.Unlock()
+				wg.Add(1)
+				go lpd(newTargetPack, resultDebMapPoiner, auxiliaryMapPointer, wg) //go
+			}
+		} else {
+			wg.Wait()
+			if len(auxiliaryMapPointer.mp) == 0 { // if after alll threads still no new packs
+				break
+			}
+		}
+	}
+
+	fmt.Println(len(resultDebMapPoiner.mp))
+
+	// for k := range resultDebMapPoiner.mp {
+	// 	fmt.Println(k) //download)
+	// }
+
+	// folderName := "packages_for_" + pack //make new folder end move to it
+	// os.Mkdir(folderName, 0700)
+	// ex, _ := os.Executable()
+	// exPath := filepath.Dir(ex)
+	// packagesFullPath := exPath + "/" + folderName
+	// err := os.Chdir(packagesFullPath)
+
+	// if err != nil {
+	// 	log.Fatal("Cant enter directory: ", packagesFullPath)
+	// }
+
+	// for keyPack := range packagesMap { // download all packages
+	// 	andso, _ := exec.Command("apt", "download", keyPack).Output()
+	// 	fmt.Println(string(andso))
+	// }
+	fmt.Println(time.Since(start))
+	//1m8.379200351s
+	//13.683422504s
+}
+
+func removePacksFromAuxiliaryMap(mainMap, secondMap *mapWithSync) {
+	secondMap.lx.Lock()
+	mainMap.rlx.Lock()
+	for k := range secondMap.mp {
+		if _, isExist := mainMap.mp[k]; isExist {
+			delete(secondMap.mp, k)
+		}
+	}
+	mainMap.rlx.Unlock()
+	secondMap.lx.Unlock()
+	return
+}
+
+func chooseNewPack(secondMap *mapWithSync) string {
+	var newTargetPack string
+	secondMap.lx.Lock()
+	for k := range secondMap.mp {
+		newTargetPack = k
+		delete(secondMap.mp, k)
+		break
+	}
+	secondMap.lx.Unlock()
+
+	return newTargetPack
+}
+
+func lpd(packName string, mainMap, secondMap *mapWithSync, wg *sync.WaitGroup) {
+	wg2 := new(sync.WaitGroup)
+
+	ou, err := exec.Command("apt-cache", "depends", packName).Output()
+	if err != nil {
+		panic(err) // TODO: don't panic? Retry?
+	}
+	resArrStr := strings.Split(string(ou), "\n")
+
+	for i, d := range resArrStr {
+		if strings.Contains(d, "PreDepends") || strings.Contains(d, "Depends") {
+			strF := strings.Fields(d)
+			p := strF[len(strF)-1]
+			if strings.Contains(p, "<") && len(resArrStr) > 1 {
+				wg2.Add(1)
+				go takeSeveralPacks(resArrStr, i, secondMap, wg2)
+			} else {
+				secondMap.lx.Lock()
+				secondMap.mp[p] = struct{}{}
+				secondMap.lx.Unlock()
+			}
+		}
+	}
+	wg2.Wait()
+	wg.Done()
+	return
+}
+
+func takeSeveralPacks(resArrStr []string, i int, secondMap *mapWithSync, wg2 *sync.WaitGroup) {
 	i++
-
-	RecurseDependens(packagesMap, i) // Get dependens for all packages (exclude some os pack)
-
-	folderName := "packages_for_" + pack //make new folder end move to it
-	os.Mkdir(folderName, 0700)
-	ex, _ := os.Executable()
-	exPath := filepath.Dir(ex)
-	packagesFullPath := exPath + "/" + folderName
-	err := os.Chdir(packagesFullPath)
-
-	if err != nil {
-		log.Fatal("Cant enter directory: ", packagesFullPath)
+	if !strings.Contains(resArrStr[i], ":") && len(resArrStr[i]) > 0 { // Sometimes apt-cache depends gives strange slice
+		rawDepP := strings.Fields(resArrStr[i]) // Slice needed for easy cleaning of gaps
+		dp := rawDepP[len(rawDepP)-1]
+		secondMap.lx.Lock()
+		secondMap.mp[dp] = struct{}{}
+		secondMap.lx.Unlock()
+		wg2.Add(1)
+		takeSeveralPacks(resArrStr, i, secondMap, wg2)
 	}
-
-	for keyPack := range packagesMap.M { // download all packages
-		andso, _ := exec.Command("apt", "download", keyPack).Output()
-		fmt.Println(string(andso))
-	}
-}
-
-func RecurseDependens(ma *MainMap, i uint) {
-	for key := range ma.M {
-		depends, err := ListPackageDepends(key)
-		if err != nil {
-			log.Fatal("Cant check dependens: ", err)
-		}
-		if depends != nil {
-			for _, dep := range depends {
-				ma.Lock()
-				keyExist := IsKeyExist(dep, ma)
-				if !keyExist {
-					Put(dep, i, ma)
-					i++
-				}
-				ma.Unlock()
-			}
-		}
-	}
-	fmt.Println("What we got:", ma, ". Total packeges: ", i)
-}
-
-func Put(key string, val uint, ma *MainMap) {
-	ma.M[key] = val
-}
-
-func IsKeyExist(key string, ma *MainMap) bool { //Check key exist
-	_, ok := ma.M[key]
-	if !ok {
-		return false
-	}
-	return true
-}
-
-func ListPackageDepends(pak string) ([]string, error) { //Get list of depends
-	outAptCache, err := exec.Command("apt-cache", "depends", pak).Output()
-	if err != nil {
-		return nil, err
-	}
-	stdoutresult := string(outAptCache)
-	arstr := strings.Split(stdoutresult, "\n")
-
-	var dependsArrStr []string
-	for _, da := range arstr {
-		if !(strings.Contains(da, "<") || strings.Contains(da, ">")) {
-			if strings.Contains(da, "PreDepends") {
-				da = string(da[13:])
-				dependsArrStr = append(dependsArrStr, da)
-			} else if strings.Contains(da, "Depends") {
-				da = string(da[11:])
-				dependsArrStr = append(dependsArrStr, da)
-			}
-
-		}
-	}
-	return dependsArrStr, nil
+	wg2.Done()
+	return
 }
